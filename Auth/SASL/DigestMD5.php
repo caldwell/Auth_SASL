@@ -73,7 +73,7 @@ class Auth_SASL_DigestMD5 extends Auth_SASL_Common
         if (!empty($challenge)) {
             $cnonce         = $this->_getCnonce();
             $digest_uri     = sprintf('%s/%s', $service, $hostname);
-            $response_value = $this->_getResponseValue($authcid, $pass, $challenge['realm'], $challenge['nonce'], $cnonce, $digest_uri, $authzid);
+            $response_value = $this->_getResponseValue($authcid, $pass, $challenge['realm'], $challenge['nonce'], $cnonce, $digest_uri, $challenge['qop'], $authzid);
 
             if ($challenge['realm']) {
                 return sprintf('username="%s",realm="%s"' . $authzid_string  .
@@ -144,6 +144,12 @@ class Auth_SASL_DigestMD5 extends Auth_SASL_Common
             return array();
         }
 
+        // Optional: qop
+        if (empty($tokens['qop'])) {
+            $tokens['qop'] = 'auth';
+        }
+        $tokens['qop'] = explode(',', $tokens['qop']);
+
         return $tokens;
     }
 
@@ -156,19 +162,34 @@ class Auth_SASL_DigestMD5 extends Auth_SASL_Common
     * @param  string $nonce      Nonce as provided by the server
     * @param  string $cnonce     Client nonce
     * @param  string $digest_uri The digest-uri= value part of the response
+    * @param  array  $qop_list   Quality Of Protection list from server.
     * @param  string $authzid    Authorization id
     * @return string             The response= part of the digest response
     * @access private
     */    
-    function _getResponseValue($authcid, $pass, $realm, $nonce, $cnonce, $digest_uri, $authzid = '')
+    function _getResponseValue($authcid, $pass, $realm, $nonce, $cnonce, $digest_uri, $qop_list, $authzid = '')
     {
+        if (array_search('auth', $qop_list) === true) {
+            $qop = 'auth';
+        } elseif (array_search('auth-sess', $qop_list) === true) {
+            $qop = 'auth-conf';
+        } elseif (array_search('auth-int', $qop_list) === true) {
+            $qop = 'auth-int';
+        } else {
+            PEAR::raiseError('Unsupported qop');
+        }
+
         if ($authzid == '') {
             $A1 = sprintf('%s:%s:%s', pack('H32', md5(sprintf('%s:%s:%s', $authcid, $realm, $pass))), $nonce, $cnonce);
         } else {
             $A1 = sprintf('%s:%s:%s:%s', pack('H32', md5(sprintf('%s:%s:%s', $authcid, $realm, $pass))), $nonce, $cnonce, $authzid);
         }
-        $A2 = 'AUTHENTICATE:' . $digest_uri;
-        return md5(sprintf('%s:%s:00000001:%s:auth:%s', md5($A1), $nonce, $cnonce, md5($A2)));
+        if ($qop == 'auth') {
+            $A2 = 'AUTHENTICATE:' . $digest_uri;
+        } else {
+            $A2 = 'AUTHENTICATE:' . $digest_uri . ':00000000000000000000000000000000';
+        }
+        return md5(sprintf('%s:%s:00000001:%s:%s:%s', md5($A1), $nonce, $cnonce, $qop, md5($A2)));
     }
 
     /**
